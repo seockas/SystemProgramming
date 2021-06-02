@@ -7,6 +7,9 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
 
 #define BUFFER_MAX 30
 #define DIRECTION_MAX 45
@@ -24,6 +27,7 @@
 #define POUT2 18
 
 double distance = 0;
+
 
 static int PWMExport(int pwmnum) {
    char buffer[BUFFER_MAX];
@@ -348,21 +352,26 @@ void *led_thd() {
         else if(distance > 20)
         {
             if (-1 == GPIOWrite(POUT2, repeat % 2))
-                return(3);
+                exit(3);
             usleep(350000);
         }
         else
         {
             if (-1 == GPIOWrite(POUT2, repeat % 2))
-                return(3);
+                exit(3);
             usleep(100000);
         }
         repeat--;
     }
     exit(0);
 }
+void error_handling(char *message){
+   fputs(message, stderr);
+   fputc('\n', stderr);
+   exit(1);
+}
 
-int main(void)
+int main(int argc, char *argv[])
 {
     pthread_t p_thread[2];
     int thr_id;
@@ -370,13 +379,47 @@ int main(void)
     char p1[] = "thread_1";
     char p2[] = "thread_2";
 
+    int sock;
+    struct sockaddr_in serv_addr;
+    char msg[2];
+    int str_len;
+    if(argc!=3){
+      printf("Usage : %s <IP> <port>\n",argv[0]);
+      exit(1);
+   }
     //ultrawave_thd();
     //led_thd();
 
     if (-1 == GPIOUnexport(POUT) || -1 == GPIOUnexport(PIN))
         return(-1);
         //Disable PWM
+
+
+    /*******家南 积己*********/
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    if(sock == -1)
+        error_handling("socket() error");
+
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = inet_addr(argv[1]);
+    serv_addr.sin_port = htons(atoi(argv[2]));
+
+    if(connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr))==-1)
+        error_handling("connect() error");
+
+
+    while(1){
+        str_len = read(sock, msg, sizeof(msg));
+        if(str_len == -1)
+            error_handling("read() error");
     
+        printf("Receive message from Server : %s\n",msg);
+    }
+
+    /**************************/
+
+
     thr_id = pthread_create(&p_thread[0], NULL, ultrawave_thd, (void *)p1);
     if (thr_id < 0)
     {
@@ -389,11 +432,14 @@ int main(void)
         perror("thread create error : ");
         exit(0);
     }
+
+    
     
     pthread_join(p_thread[0], (void **)&status);
     pthread_join(p_thread[1], (void **)&status);
-
+    
     PWMUnexport(PWM);
+    close(sock);
 
     return 0;
 }
