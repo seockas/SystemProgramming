@@ -25,9 +25,14 @@
 
 int sig_flag = 0;
 int walk_flag = 1;
-int serv_sock=-1;
-int clnt_sock=-1;
+int serv_sock1=-1;
+int clnt_sock1=-1;
+int serv_sock2=-1;
+int clnt_sock2=-1;
 char msg[2];
+struct sockaddr_in serv_addr1, serv_addr2, clnt_addr1, clnt_addr2;
+socklen_t clnt_addr_size1, clnt_addr_size2;
+
 void error_handling(char *message){
 	fputs(message,stderr);
 	fputc('\n',stderr);
@@ -194,7 +199,8 @@ void *walker(){
                     exit (3);
             printf("msg : %d\n", walk_flag);
             snprintf(msg,2,"%d",walk_flag);
-		    write(clnt_sock, msg, sizeof(msg));
+		    write(clnt_sock1, msg, sizeof(msg));
+            write(clnt_sock2, msg, sizeof(msg));
         }
         else{
             walk_flag=0;
@@ -204,25 +210,72 @@ void *walker(){
                     exit (3);
             printf("msg : %d\n", walk_flag);
             snprintf(msg,2,"%d",walk_flag);
-		    write(clnt_sock, msg, sizeof(msg));
+		    write(clnt_sock1, msg, sizeof(msg));
+            write(clnt_sock2, msg, sizeof(msg));
         }
     }
     
 }
+void* makesock1()
+{
+    serv_sock1 = socket(PF_INET, SOCK_STREAM, 0);
+	if(serv_sock1 == -1)
+		error_handling("socket() error");
+	
+	memset(&serv_addr1, 0 , sizeof(serv_addr1));
+	serv_addr1.sin_family = AF_INET;
+	serv_addr1.sin_addr.s_addr = htonl(INADDR_ANY);
+	serv_addr1.sin_port = htons(8888);
+ 
+	if(bind(serv_sock1, (struct sockaddr*) &serv_addr1, sizeof(serv_addr1))==-1)
+		error_handling("bind() error");
+
+    if(listen(serv_sock1,5) == -1)
+		error_handling("listen() error");
+
+    if(clnt_sock1<0){
+		clnt_addr_size1 = sizeof(clnt_addr1);
+		clnt_sock1 = accept(serv_sock1, (struct sockaddr*)&clnt_addr1,  &clnt_addr_size1);
+		if(clnt_sock1 == -1)
+		    error_handling("accept() error");
+	}
+}
+void* makesock2(){
+    serv_sock2 = socket(PF_INET, SOCK_STREAM, 0);
+	if(serv_sock2 == -1)
+		error_handling("socket() error");
+	
+	memset(&serv_addr2, 0 , sizeof(serv_addr2));
+	serv_addr2.sin_family = AF_INET;
+	serv_addr2.sin_addr.s_addr = htonl(INADDR_ANY);
+	serv_addr2.sin_port = htons(8000);
+ 
+	if(bind(serv_sock2, (struct sockaddr*) &serv_addr2, sizeof(serv_addr2))==-1)
+		error_handling("bind() error");
+
+    if(listen(serv_sock2,5) == -1)
+		error_handling("listen() error");
+
+    if(clnt_sock2<0){
+		clnt_addr_size2 = sizeof(clnt_addr2);
+		clnt_sock2 = accept(serv_sock2, (struct sockaddr*)&clnt_addr2,  &clnt_addr_size2);
+		if(clnt_sock2 == -1)
+		    error_handling("accept() error");
+	}
+}
 
 int main(int argc, char *argv[])
 {
-    pthread_t p_thread[2];
-    int thr_id[2];
-    int status;
+    pthread_t p_thread[4];
+    int thr_id[4];
+    int status1, status2, status3, status4;
     char p1[] = "thread_1";
     char p2[] = "thread_2";
+    char p3[] = "thread_3";
+    char p4[] = "thread_4";
     
     setsid();
     umask(0);
-    
-    struct sockaddr_in serv_addr,clnt_addr;
-	socklen_t clnt_addr_size;
 
     breakCapture = signal(SIGINT, signalingHandler);
     //Enable GPIO pins
@@ -246,39 +299,30 @@ int main(int argc, char *argv[])
        perror("thread create error : ");
        exit(0);
     }
+    thr_id[2] = pthread_create(&p_thread[2], NULL, makesock1, (void *)p3);
+    if(thr_id[0] < 0)
+    {
+       perror("thread create error : ");
+       exit(0);
+    }
+    thr_id[3] = pthread_create(&p_thread[3], NULL, makesock2, (void *)p4);
+    if(thr_id[1] < 0)
+    {
+       perror("thread create error : ");
+       exit(0);
+    }
 
 
-    if(argc!=2){
-		printf("Usage : %s <port>\n",argv[0]);
-	}
 
-	serv_sock = socket(PF_INET, SOCK_STREAM, 0);
-	if(serv_sock == -1)
-		error_handling("socket() error");
-	
-	memset(&serv_addr, 0 , sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	serv_addr.sin_port = htons(atoi(argv[1]));
- 
-	if(bind(serv_sock, (struct sockaddr*) &serv_addr, sizeof(serv_addr))==-1)
-		error_handling("bind() error");
+    pthread_join(p_thread[0], (void**)&status1);
+    pthread_join(p_thread[1], (void**)&status2);
+    pthread_join(p_thread[2], (void**)&status3);
+    pthread_join(p_thread[3], (void**)&status4);
 
-    if(listen(serv_sock,5) == -1)
-		error_handling("listen() error");
-
-    if(clnt_sock<0){
-		clnt_addr_size = sizeof(clnt_addr);
-		clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_addr,  &clnt_addr_size);
-		if(clnt_sock == -1)
-		    error_handling("accept() error");
-	}
-
-    pthread_join(p_thread[0], (void**)&status);
-    pthread_join(p_thread[1], (void**)&status);
-
-    close(clnt_sock);
-	close(serv_sock);
+    close(clnt_sock1);
+	close(serv_sock1);
+    close(clnt_sock2);
+	close(serv_sock2);
 
     //Disable GPIO pins
     if (-1 == GPIOUnexport(ROUT) || -1 == GPIOUnexport(GOUT) || -1 == GPIOUnexport(BOUT) || -1 == GPIOUnexport(STOP) || -1 == GPIOUnexport(GO))
