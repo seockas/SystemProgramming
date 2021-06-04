@@ -27,7 +27,11 @@
 #define POUT2 18
 
 double distance = 0;
-
+char msg[2];
+int sock;
+struct sockaddr_in serv_addr;
+int str_len;
+int signal;
 
 static int PWMExport(int pwmnum) {
    char buffer[BUFFER_MAX];
@@ -261,32 +265,23 @@ static int GPIOWrite(int pin, int value){
     if(1!=write(fd, &s_values_str[LOW==value?0:1],1)){
         fprintf(stderr, "Failed to write value!\n");
         return(-1);
-
+    }
     close(fd);
     return(0);
-    }
+    
+}
+
+
+void error_handling(char *message){
+    
+    fputs(message, stderr);
+    fputc('\n', stderr);
+    exit(1);
 }
 
 void *ultrawave_thd(){
     clock_t start_t, end_t;
     double time;
-    
-    //Enable GPIO pins
-    if (-1 == GPIOExport(POUT) || -1 == GPIOExport(PIN))
-    {
-        printf("gpio export err\n");
-        exit(0);
-    }
-
-    //wait for writing to export file
-    usleep(100000);
-
-    //Set GPIO direction
-    if (-1 == GPIODirection(POUT, OUT) || -1 == GPIODirection(PIN, IN))
-    {
-        printf("gpio direction err\n");
-        exit(0);
-    }
 
     usleep(10000);
 
@@ -330,10 +325,11 @@ void *ultrawave_thd(){
 }
 
 void *led_thd() {
+    
     int target_bright = 0;
     int prev_bright = 0;
     int repeat = 10;
-
+    
     PWMExport(PWM);
     PWMWritePeriod(PWM, 20000000);
     PWMWriteDutyCycle(PWM, 0);
@@ -344,45 +340,60 @@ void *led_thd() {
     
     while(1)
     {
-        if(distance > 50)
+        //printf("LED");
+        if(signal == 0)
         {
-            GPIOWrite(POUT2, 0);
-            usleep(1000000);
+            if(distance > 50)
+            {
+                GPIOWrite(POUT2, 0);
+                usleep(1000000);
+            }
+            else if(distance > 20)
+            {
+                if (-1 == GPIOWrite(POUT2, repeat % 2))
+                    return(3);
+                usleep(350000);
+            }
+            else
+            {
+                if (-1 == GPIOWrite(POUT2, repeat % 2))
+                    return(3);
+                usleep(100000);
+            }
         }
-        else if(distance > 20)
+        else if(signal == 1)
         {
-            if (-1 == GPIOWrite(POUT2, repeat % 2))
-                exit(3);
-            usleep(350000);
+            if (-1 == GPIOWrite(POUT2, 0))
+                    return(3);
         }
-        else
-        {
-            if (-1 == GPIOWrite(POUT2, repeat % 2))
-                exit(3);
-            usleep(100000);
-        }
+            
         repeat--;
     }
     exit(0);
 }
-void error_handling(char *message){
-   fputs(message, stderr);
-   fputc('\n', stderr);
-   exit(1);
+
+void *data_thd() {
+    while(1)
+    {
+        str_len = read(sock, msg, sizeof(msg));
+        if(str_len == -1)
+            error_handling("read() error");
+        signal = atoi(msg);
+        printf("Receive message from Server : %s\n",msg);
+    }
+    exit(1);
+    
 }
 
 int main(int argc, char *argv[])
 {
-    pthread_t p_thread[2];
+    pthread_t p_thread[3];
     int thr_id;
     int status;
     char p1[] = "thread_1";
     char p2[] = "thread_2";
-
-    int sock;
-    struct sockaddr_in serv_addr;
-    char msg[2];
-    int str_len;
+    char p3[] = "thread_3";
+    
     if(argc!=3){
       printf("Usage : %s <IP> <port>\n",argv[0]);
       exit(1);
@@ -390,12 +401,27 @@ int main(int argc, char *argv[])
     //ultrawave_thd();
     //led_thd();
 
-    if (-1 == GPIOUnexport(POUT) || -1 == GPIOUnexport(PIN))
+    if (-1 == GPIOUnexport(POUT) || -1 == GPIOUnexport(PIN) || -1 == GPIOUnexport(POUT2))
         return(-1);
         //Disable PWM
 
+        //Enable GPIO pins
+    if (-1 == GPIOExport(POUT) || -1 == GPIOExport(PIN) || -1 == GPIOExport(POUT2))
+    {
+        printf("gpio export err\n");
+        exit(0);
+    }
 
-    /*******家南 积己*********/
+    //wait for writing to export file
+    usleep(100000);
+
+    //Set GPIO direction
+    if (-1 == GPIODirection(POUT, OUT) || -1 == GPIODirection(PIN, IN) || -1 == GPIODirection(POUT2, OUT))
+    {
+        printf("gpio direction err\n");
+        exit(0);
+    }
+    /*******socket*********/
     sock = socket(PF_INET, SOCK_STREAM, 0);
     if(sock == -1)
         error_handling("socket() error");
@@ -407,19 +433,9 @@ int main(int argc, char *argv[])
 
     if(connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr))==-1)
         error_handling("connect() error");
-
-
-    while(1){
-        str_len = read(sock, msg, sizeof(msg));
-        if(str_len == -1)
-            error_handling("read() error");
-    
-        printf("Receive message from Server : %s\n",msg);
-    }
-
     /**************************/
 
-
+    
     thr_id = pthread_create(&p_thread[0], NULL, ultrawave_thd, (void *)p1);
     if (thr_id < 0)
     {
@@ -432,14 +448,19 @@ int main(int argc, char *argv[])
         perror("thread create error : ");
         exit(0);
     }
-
-    
+    thr_id = pthread_create(&p_thread[2], NULL, data_thd, (void *)p3);
+    if (thr_id < 0)
+    {
+        perror("thread create error : ");
+        exit(0);
+    }
     
     pthread_join(p_thread[0], (void **)&status);
     pthread_join(p_thread[1], (void **)&status);
+    pthread_join(p_thread[2], (void **)&status);
     
     PWMUnexport(PWM);
-    close(sock);
+    //close(sock);
 
     return 0;
 }
