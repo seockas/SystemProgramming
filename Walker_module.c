@@ -9,8 +9,6 @@
 #include <string.h>
 #include <linux/types.h>
 #include <linux/spi/spidev.h>
-#include <pthread.h>
-#include <time.h>
 
 #define IN 0
 #define OUT 1
@@ -28,8 +26,6 @@ static uint8_t MODE=SPI_MODE_0;
 static uint8_t BITS=8;
 static uint32_t CLOCK=1000000;
 static uint16_t DELAY=5;
-
-double distance = 0;
 
 static int PWMExport(int pwmnum) {
 #define BUFFER_MAX 3
@@ -199,74 +195,12 @@ int readadc(int fd, uint8_t channel)
     return ((rx[1] << 8) & 0x300) | (rx[2] & 0xFF);
 }
 
-void *ultrawave_thd(){
-    clock_t start_t, end_t;
-    double time;
-    
-    //Enable GPIO pins
-    if (-1 == GPIOExport(POUT) || -1 == GPIOExport(PIN))
-    {
-        printf("gpio export err\n");
-        exit(0);
-    }
-
-    //wait for writing to export file
-    usleep(100000);
-
-    //Set GPIO direction
-    if (-1 == GPIODirection(POUT, OUT) || -1 == GPIODirection(PIN, IN))
-    {
-        printf("gpio direction err\n");
-        exit(0);
-    }
-
-    usleep(10000);
-
-    //init ultrawave trigger
-    GPIOWrite(POUT, 0);
-    usleep(10000);
-
-    // start
-    while(1)
-    {
-        if (-1 == GPIOWrite(POUT, 1))
-        {
-            printf("gpio write/tirgger err\n");
-            exit(0);
-        }
-
-        //1sec == 1000000ultra_sec, ims = 1000ultra_sec
-        usleep(10);
-        GPIOWrite(POUT, 0);
-
-        while(GPIORead(PIN) == 0)
-        {
-            start_t = clock();
-        }
-        while(GPIORead(PIN) == 1)
-        {
-            end_t = clock();
-        }
-        
-        time = (double)(end_t-start_t)/CLOCKS_PER_SEC;
-        distance = time/2*34000;
-
-        if(distance > 900)
-            distance = 900;
-        
-        printf("time : %.4lf\n", time);
-        printf("distance : %.2lfcm\n", distance);
-   
-        usleep(500000);
-    }
-}
-
 void *pressure_thd() {
     int press=0;
 
     PWMExport(0);
     PWMWritePeriod(0, 100000);
-    PWMWriteDutyCycle(0, 100000);
+    PWMWriteDutyCycle(0, 0);
 
     usleep(100000);
     PWMEnable(0);
@@ -304,42 +238,13 @@ void *pressure_thd() {
     return 0;
 }
 
-void *buzer_thd() {
-    PWMExport(0);
-    PWMWritePeriod(0, 100000);
-    PWMWriteDutyCycle(0, 100000);
-    usleep(100000);
-    PWMEnable(0);
-    
-    setsid();
-    umask(0);
-    
-    while(1)
-    {
-        if(distance > 50)
-        {
-            PWMWriteDutyCycle(0, press*100);
-            usleep(10000);
-        }
-        else
-        {
-            PWMWriteDutyCycle(0, 100000);
-            usleep(100000);
-        }
-        
-    }
-    PWMWriteDutyCycle(0, 100000);
-    exit(0);
-}
-
 int main(int argc, char **argv)
 {
-    pthread_t p_thread[3];
+    pthread_t p_thread[2];
     int thr_id;
     int status;
     char p1[] = "thread_1";
     char p2[] = "thread_2";
-    char p3[] = "thread_3";
 
 
     if (-1 == GPIOUnexport(POUT) || -1 == GPIOUnexport(PIN))
@@ -352,13 +257,7 @@ int main(int argc, char **argv)
         perror("thread create error : ");
         exit(0);
     }
-    thr_id = pthread_create(&p_thread[1], NULL, ultrawave_thd, (void *)p2);
-    if (thr_id < 0)
-    {
-        perror("thread create error : ");
-        exit(0);
-    }
-    thr_id = pthread_create(&p_thread[1], NULL, buzer_thd, (void *)p3);
+    thr_id = pthread_create(&p_thread[1], NULL, led_thd, (void *)p2);
     if (thr_id < 0)
     {
         perror("thread create error : ");
@@ -366,10 +265,9 @@ int main(int argc, char **argv)
     }
     
     pthread_join(p_thread[0], (void **)&status);
-    pthread_join(p_thread[1], (void **)&status);
-    pthread_join(p_thread[2], (void **)&status);
+    //pthread_join(p_thread[1], (void **)&status);
 
-    PWMUnexport(0);
+    PWMUnexport(PWM);
 
     return 0;
 }
