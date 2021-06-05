@@ -10,18 +10,29 @@
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <linux/types.h>
+#include <linux/spi/spidev.h>
+#include <stdint.h>
 
 #define IN 0
 #define OUT 1
 #define LOW 0
 #define HIGH 1
 #define PIN 24
+#define POUT 23
 #define ROUT 17
 #define GOUT 27
 #define BOUT 22
 #define STOP 16 //보행자 적색 신호
 #define GO 20 //보행자 녹색 신호
 #define VALUE_MAX 35
+#define ARRAY_SIZE(array) sizeof(array) / sizeof(array[0])
+
+static const char *DEVICE = "/dev/spidev0.0";
+static uint8_t MODE=SPI_MODE_0;
+static uint8_t BITS=8;
+static uint32_t CLOCK=1000000;
+static uint16_t DELAY=5;
 
 int sig_flag = 0;
 int walk_flag = 1;
@@ -29,6 +40,9 @@ int serv_sock1=-1;
 int clnt_sock1=-1;
 int serv_sock2=-1;
 int clnt_sock2=-1;
+int press;
+int pressfd;
+int timebonus=2000000;
 char msg[2];
 struct sockaddr_in serv_addr1, serv_addr2, clnt_addr1, clnt_addr2;
 socklen_t clnt_addr_size1, clnt_addr_size2;
@@ -38,6 +52,61 @@ void error_handling(char *message){
 	fputc('\n',stderr);
 	exit(1);
 }
+static int prepare(int fd) {
+    if(ioctl(fd, SPI_IOC_WR_MODE, &MODE) == -1){
+   perror("Can't set MODE");
+   return -1;
+    }
+    
+    if(ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &BITS) == -1){
+   perror("Can't set number of BITS");
+   return -1;
+    }
+    
+    if(ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &CLOCK) == -1){
+   perror("Can't set write CLOCK");
+   return -1;
+    }
+    
+    if(ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &CLOCK) == -1){
+   perror("Can't set read CLOCK");
+   return -1;
+    }
+}
+
+uint8_t control_bits_differential(uint8_t channel)
+{
+    return (channel & 7) << 4;
+}
+
+uint8_t control_bits(uint8_t channel)
+{
+    return 0x8 | control_bits_differential(channel);
+}
+
+int readadc(int fd, uint8_t channel)
+{
+    uint8_t tx[] = {1, control_bits(channel), 0};
+    uint8_t rx[3];
+
+    struct spi_ioc_transfer tr={
+        .tx_buf = (unsigned long)tx,
+        .rx_buf = (unsigned long)rx,
+        .len = ARRAY_SIZE(tx),
+        .delay_usecs = DELAY,
+        .speed_hz = CLOCK,
+        .bits_per_word = BITS,
+    };
+
+    if (ioctl(fd, SPI_IOC_MESSAGE(1), &tr) == 1)
+    {
+        perror("IO Error");
+        abort();
+    }
+
+    return ((rx[1] << 8) & 0x300) | (rx[2] & 0xFF);
+}
+
 
 static int GPIOExport(int pin)
 {
@@ -155,7 +224,18 @@ void *sinho() {
                 exit (3);
             if(-1 == GPIOWrite(ROUT, 1))
                 exit (3);
-            usleep(5000000);
+            
+            usleep(8000000);
+            int senderpress=readadc(pressfd, 0);
+            printf("press : %d\n", senderpress);
+            if( senderpress < 500 ){
+                timebonus=7000000;
+                printf("5초 보너스!\n");
+            }
+            else{
+                timebonus=2000000;
+            }
+            usleep(timebonus);
 
         }
         else if(sig % 3 == 2) // Blue(Yellow) lihgt
@@ -180,7 +260,8 @@ void *sinho() {
                 exit (3);
             if(-1 == GPIOWrite(GOUT, 1))
                 exit (3);
-            usleep(5000000);
+            
+            usleep(12000000-timebonus);
             
         }
         sig ++;
@@ -286,7 +367,16 @@ int main(int argc, char *argv[])
     if (-1 == GPIODirection(ROUT, OUT) || -1 == GPIODirection(GOUT, OUT) || -1 == GPIODirection(BOUT, OUT) || -1 == GPIODirection(STOP, OUT) || -1 == GPIODirection(GO, OUT))
         return(2);
     
-    
+    pressfd=open(DEVICE, O_RDWR);
+    if(pressfd<=0){
+        printf("Device %s not found\n", DEVICE);
+        return -1;
+    }
+
+    if(prepare(pressfd)==-1){
+        return -1;
+    }
+
     thr_id[0] = pthread_create(&p_thread[0], NULL, sinho, (void *)p1);
     if(thr_id[0] < 0)
     {
@@ -311,8 +401,6 @@ int main(int argc, char *argv[])
        perror("thread create error : ");
        exit(0);
     }
-
-
 
     pthread_join(p_thread[0], (void**)&status1);
     pthread_join(p_thread[1], (void**)&status2);
