@@ -539,7 +539,7 @@ void *buzer_thd() {
     
     while(1)
     {
-            if(distance < 50 && signal == 0)
+            if(distance < 7 && signal == 0)
             {
                 PWMWriteDutyCycle(0, 10000);
                 usleep(10000);
@@ -568,7 +568,7 @@ void *pressure_thd() {
     if(prepare(fd)==-1){
         exit (1);
     }
-    press = readadc(fd, 0);
+    //press = readadc(fd, 0);
     
     while(1){
 
@@ -576,7 +576,7 @@ void *pressure_thd() {
             press = readadc(fd, 0);
             //printf("%d\n", press);
             //printf("%d\n", press);
-            if(20 < readadc(fd, 0) && signal == 0)
+            if(20 < press && signal == 0)
             {
                 PWMWriteDutyCycle(0, 10000);
                 printf("trespassing!\n");
@@ -594,6 +594,7 @@ void *pressure_thd() {
                 }
                 usleep(100000);
             }
+            prev_press = press;
 
     }
     
@@ -770,3 +771,4 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
